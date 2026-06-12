@@ -1,0 +1,10 @@
+{
+  "name": "planos-interactivos",
+  "version": "0.2.0",
+  "private": true,
+  "type": "module",
+  "description": "Backend serverless que usa Claude para leer escrituras (PDF) y extraer los linderos de una propiedad.",
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.104.1"
+  }
+}

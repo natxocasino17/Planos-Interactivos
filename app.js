@@ -22,6 +22,7 @@
     nextNum: 1,
     drag: null,                   // estado de arrastre en curso
     space: false,                 // barra espaciadora -> pan temporal
+    pendingPdf: null,             // escritura en PDF pendiente de analizar { name, data(base64) }
   };
 
   // ---------- Utilidades DOM ----------
@@ -507,6 +508,25 @@
     closeBtn.onclick = () => { if (poly.points.length >= 3) { poly.closed = !poly.closed; render(); refreshStylePanel(); } };
     host.append(el("div", { style: "margin:13px 0" }, [closeBtn]));
 
+    // Escalar / Rotar (útil para encajar un lindero generado por IA sobre la foto)
+    const scaleR = el("input", { type: "range", min: 25, max: 300, value: 100 });
+    const scaleV = el("span", { className: "val", textContent: "100%" });
+    scaleR.dataset.last = "100";
+    scaleR.oninput = () => {
+      transformPoly(poly, +scaleR.value / +scaleR.dataset.last, 0);
+      scaleR.dataset.last = scaleR.value; scaleV.textContent = scaleR.value + "%"; render();
+    };
+    host.append(field("Escalar (encajar en la foto)", el("div", { className: "row" }, [scaleR, scaleV])));
+
+    const rotR = el("input", { type: "range", min: -180, max: 180, value: 0 });
+    const rotV = el("span", { className: "val", textContent: "0°" });
+    rotR.dataset.last = "0";
+    rotR.oninput = () => {
+      transformPoly(poly, 1, +rotR.value - +rotR.dataset.last);
+      rotR.dataset.last = rotR.value; rotV.textContent = rotR.value + "°"; render();
+    };
+    host.append(field("Rotar", el("div", { className: "row" }, [rotR, rotV])));
+
     // ----- Edición por arista (línea individual) -----
     const edge = state.selection.edge;
     if (edge !== null && (poly.closed || edge < poly.points.length - 1)) {
@@ -620,13 +640,139 @@
     };
     reader.readAsDataURL(file);
   }
-  function loadTextFile(file) {
-    const reader = new FileReader();
-    reader.onload = () => {
-      $("#deed").textContent = reader.result.slice(0, 4000);
-      $("#deed-name").textContent = "📄 " + file.name;
+  function loadDeedFile(file) {
+    const isPdf = /pdf/i.test(file.type) || /\.pdf$/i.test(file.name);
+    if (isPdf) {
+      const reader = new FileReader();
+      reader.onload = () => {
+        const b64 = String(reader.result).split(",")[1] || "";
+        state.pendingPdf = { name: file.name, data: b64 };
+        $("#deed-name").textContent = "📑 " + file.name + " — listo para analizar";
+        $("#analizar-ia").style.display = "block";
+        $("#deed").textContent = "";
+        setIAStatus("");
+      };
+      reader.readAsDataURL(file);
+    } else {
+      state.pendingPdf = null;
+      $("#analizar-ia").style.display = "none";
+      setIAStatus("");
+      const reader = new FileReader();
+      reader.onload = () => {
+        $("#deed").textContent = String(reader.result).slice(0, 4000);
+        $("#deed-name").textContent = "📄 " + file.name;
+      };
+      reader.readAsText(file);
+    }
+  }
+
+  function setIAStatus(msg, err) {
+    const elx = $("#ia-status");
+    elx.textContent = msg || "";
+    elx.style.color = err ? "var(--danger)" : "var(--txt-dim)";
+  }
+
+  // ---------- Llamada a la IA (backend) ----------
+  async function analizarEscritura() {
+    if (!state.pendingPdf) return;
+    const btn = $("#analizar-ia");
+    btn.disabled = true;
+    btn.textContent = "⏳ Analizando escritura…";
+    setIAStatus("Leyendo el PDF con la IA (puede tardar ~10-30 s)…");
+    try {
+      const url = (window.PLANOS_API || "") + "/api/analizar-escritura";
+      const r = await fetch(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ pdf_base64: state.pendingPdf.data, filename: state.pendingPdf.name }),
+      });
+      const data = await r.json().catch(() => ({ ok: false, error: "Respuesta no válida del servidor." }));
+      if (!r.ok || !data.ok) throw new Error(data.error || "Error " + r.status);
+
+      if (data.resumen) {
+        $("#deed").textContent = data.resumen + (data.superficie_m2 ? "\n\nSuperficie: " + data.superficie_m2 + " m²" : "");
+      }
+      if (!data.linderos || !data.linderos.length) {
+        setIAStatus(data.es_escritura === false
+          ? "El documento no parece una escritura con linderos."
+          : "No se encontraron linderos con medidas en el documento.", true);
+        return;
+      }
+      colocarLinderos(data.linderos);
+      setIAStatus("✅ " + data.linderos.length + " linderos generados. Ajústalos sobre la foto: arrastra el terreno, usa Escalar/Rotar (panel derecho) y afina los vértices.");
+    } catch (e) {
+      const msg = String((e && e.message) || e);
+      const friendly = /Failed to fetch|NetworkError|Unexpected token|404/i.test(msg)
+        ? "La función de IA necesita el backend. Abre la web desde el enlace de Vercel (el de GitHub Pages no tiene servidor)."
+        : msg;
+      setIAStatus("❌ " + friendly, true);
+    } finally {
+      btn.disabled = false;
+      btn.textContent = "🤖 Generar linderos con IA";
+    }
+  }
+
+  // ---------- Reconstrucción del polígono desde los linderos ----------
+  function orientacionAAzimut(o) {
+    const k = (o || "").toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g, "").trim();
+    const m = {
+      norte: 0, sur: 180, este: 90, oeste: 270,
+      noreste: 45, nordeste: 45, sureste: 135, sudeste: 135,
+      suroeste: 225, sudoeste: 225, noroeste: 315,
     };
-    reader.readAsText(file);
+    return m[k] != null ? m[k] : null;
+  }
+
+  function colocarLinderos(linderos) {
+    const lados = linderos.map((l) => ({
+      az: typeof l.azimut_grados === "number" ? l.azimut_grados : orientacionAAzimut(l.orientacion),
+      len: typeof l.longitud_metros === "number" && l.longitud_metros > 0 ? l.longitud_metros : null,
+      label: typeof l.longitud_metros === "number" ? l.longitud_metros + " m" : (l.orientacion || ""),
+    }));
+    const conocidas = lados.filter((l) => l.len).map((l) => l.len).sort((a, b) => a - b);
+    const mediana = conocidas.length ? conocidas[Math.floor(conocidas.length / 2)] : 30;
+    lados.forEach((l) => { if (!l.len) l.len = mediana; if (l.az == null) l.az = 0; });
+
+    // Encadena los lados como vectores en espacio "metros" (Norte arriba)
+    const pts = [{ x: 0, y: 0 }];
+    lados.forEach((l) => {
+      const a = (l.az * Math.PI) / 180;
+      const prev = pts[pts.length - 1];
+      pts.push({ x: prev.x + l.len * Math.sin(a), y: prev.y - l.len * Math.cos(a) });
+    });
+    pts.pop(); // el último cierra sobre el primero
+    if (pts.length < 2) { setIAStatus("Medidas insuficientes para dibujar el perímetro.", true); return; }
+
+    // Normaliza a coordenadas de imagen: centrado y a ~45% del fondo
+    const xs = pts.map((p) => p.x), ys = pts.map((p) => p.y);
+    const minX = Math.min(...xs), maxX = Math.max(...xs), minY = Math.min(...ys), maxY = Math.max(...ys);
+    const w = maxX - minX || 1, h = maxY - minY || 1;
+    const bg = state.bg || { w: 1280, h: 860 };
+    const k = Math.min((bg.w * 0.45) / w, (bg.h * 0.45) / h);
+    const offX = bg.w * 0.5 - ((minX + maxX) / 2) * k;
+    const offY = bg.h * 0.5 - ((minY + maxY) / 2) * k;
+    const world = pts.map((p) => ({ x: p.x * k + offX, y: p.y * k + offY }));
+
+    const poly = crearPoligono();
+    poly.name = "Lindero (escritura)";
+    poly.points = world;
+    poly.closed = world.length >= 3;
+    lados.forEach((l, i) => { if (l.label) poly.edges[i] = { label: l.label }; });
+    state.polygons.push(poly);
+    selectPoly(poly.id);
+    setTool("select");
+    fitView();
+    refreshLayers(); render();
+  }
+
+  // Escala/rota un polígono alrededor de su centroide (espacio mundo)
+  function transformPoly(poly, factor, deltaDeg) {
+    const c = centroid(poly.points);
+    const rad = (deltaDeg * Math.PI) / 180, cos = Math.cos(rad), sin = Math.sin(rad);
+    poly.points = poly.points.map((p) => {
+      const x = (p.x - c.x) * factor, y = (p.y - c.y) * factor;
+      return { x: c.x + (x * cos - y * sin), y: c.y + (x * sin + y * cos) };
+    });
   }
 
   function wireDrop(zone, accept, handler) {
@@ -718,7 +864,8 @@
 
     // Drop zones
     wireDrop($("#drop-img"), "image", loadImageFile);
-    wireDrop($("#drop-txt"), "text", loadTextFile);
+    wireDrop($("#drop-txt"), "deed", loadDeedFile);
+    $("#analizar-ia").onclick = analizarEscritura;
 
     window.addEventListener("resize", resize);
 

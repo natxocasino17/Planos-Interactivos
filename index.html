@@ -44,10 +44,12 @@
         <div class="drop" id="drop-txt">
           <div class="big">📜</div>
           Escritura / descripción legal
-          <small>Arrastra un .txt o haz clic</small>
-          <input type="file" accept=".txt,text/plain" hidden />
+          <small>Arrastra un PDF o .txt (o haz clic)</small>
+          <input type="file" accept=".pdf,application/pdf,.txt,text/plain" hidden />
         </div>
         <div id="deed-name" class="hint" style="margin-top:8px"></div>
+        <button class="btn primary" id="analizar-ia" style="margin-top:10px; display:none">🤖 Generar linderos con IA</button>
+        <div id="ia-status" class="hint" style="margin-top:8px"></div>
         <div class="deed" id="deed"></div>
       </div>
 

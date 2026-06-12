@@ -4,42 +4,37 @@ Web para **visualizar y delimitar propiedades inmobiliarias** sobre planos de pl
 fotos aéreas. Permite trazar los linderos de un terreno punto por punto, ajustarlos
 arrastrando las esquinas, darles color/estilo y etiquetar cada lado con su medida.
 
-El editor es una **web estática** (HTML + CSS + JavaScript puro con HTML5 Canvas).
-Además incluye un módulo opcional de **IA** que lee la escritura (PDF) con **Claude
-Opus 4.8** y genera automáticamente los linderos para que solo tengas que ajustarlos
-sobre la foto.
+Es una **web estática** (HTML + CSS + JavaScript puro con HTML5 Canvas). El núcleo
+**no requiere instalación, compilación, servidor ni claves**, y funciona en GitHub Pages.
 
-## 🤖 IA: generar linderos desde la escritura (PDF)
+## 📐 Detectar linderos desde la escritura (gratis, en el navegador)
 
-Flujo: subes la **foto/plano** y la **escritura en PDF** → pulsas *"Generar linderos con
-IA"* → Claude lee la escritura, extrae cada lindero (orientación, longitud en metros y
-con quién linda) y dibuja el perímetro → tú lo **arrastras, escalas y giras** para
-encajarlo en la foto y afinas los vértices.
+Flujo: subes la **foto/plano** y la **escritura en PDF** (o `.txt`) → pulsas *"Detectar
+linderos del documento"* → la web lee el texto **dentro del propio navegador** y dibuja
+el perímetro. Luego lo **arrastras, escalas y giras** para encajarlo en la foto y afinas
+los vértices.
 
-> ⚠️ **Importante:** una escritura describe la *forma y medidas* del terreno, pero casi
-> nunca dónde está exactamente sobre tu foto (escala, posición, rotación). Por eso la IA
-> **propone** el polígono y tú lo **anclas**. Solo sería 100% automático si la escritura
-> trae coordenadas GPS/UTM y la foto está georreferenciada.
+Dos casos:
 
-### Arquitectura del módulo IA
+1. **Con coordenadas (UTM):** si la escritura trae coordenadas, el perímetro se dibuja
+   con su **forma, orientación y medidas EXACTAS** (no aproximadas).
+2. **Sin coordenadas:** se reconstruye por **rumbos** (Norte/Sur/Este…) + **longitudes en
+   metros** (entiende cifras y números escritos con letra, p. ej. *"treinta y cinco
+   metros"*). La forma es aproximada y tú la ajustas sobre la foto.
 
-- `api/analizar-escritura.js` — función **serverless** (Vercel). Recibe el PDF en base64,
-  llama a Claude con **salida estructurada** (JSON Schema) y devuelve los linderos.
-- La **API key vive solo en el servidor** (variable de entorno `ANTHROPIC_API_KEY`),
-  nunca en el navegador.
-- El front (`app.js`) reconstruye el polígono encadenando los rumbos + distancias.
+Tecnología: [pdf.js](https://mozilla.github.io/pdf.js/) (lectura del PDF en el navegador)
++ un analizador de texto en `app.js`. **Sin coste, sin tokens, sin backend.**
 
-### Desplegar el backend (Vercel)
+> ⚠️ **Limitaciones honestas:** solo lee PDFs **con texto** (digitales); si es **escaneado**
+> (solo imagen) no hay texto que extraer — pega el texto a mano en el recuadro. Con
+> redacciones poco habituales el analizador puede no detectar algún lado.
 
-1. En [vercel.com](https://vercel.com) → *Add New Project* → importa este repositorio.
-2. En *Settings → Environment Variables* añade `ANTHROPIC_API_KEY` con tu clave de
-   [console.anthropic.com](https://console.anthropic.com).
-3. Deploy. La web + la IA quedan en tu enlace `…vercel.app`.
+### (Opcional) Modo avanzado con IA — `api/` + Vercel
 
-> El enlace de **GitHub Pages** sigue sirviendo el editor manual, pero la IA solo
-> funciona en el despliegue de **Vercel** (es quien tiene el backend con la clave).
-
-Es una **web estática** en su núcleo: el editor no requiere instalación ni compilación.
+Para escrituras escaneadas o con redacción compleja, el repo incluye un backend opcional
+(`api/analizar-escritura.js`) que usa **Claude Opus 4.8** para leer el PDF. Requiere
+desplegar en Vercel y una API key (`ANTHROPIC_API_KEY`). **No es necesario** para el modo
+gratuito anterior; queda como alternativa para casos difíciles.
 
 ## ▶️ Cómo abrirla
 

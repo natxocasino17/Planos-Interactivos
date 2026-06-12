@@ -22,7 +22,7 @@
     nextNum: 1,
     drag: null,                   // estado de arrastre en curso
     space: false,                 // barra espaciadora -> pan temporal
-    pendingPdf: null,             // escritura en PDF pendiente de analizar { name, data(base64) }
+    deedText: "",                 // texto de la escritura (extraído del PDF o .txt)
   };
 
   // ---------- Utilidades DOM ----------
@@ -642,28 +642,48 @@
   }
   function loadDeedFile(file) {
     const isPdf = /pdf/i.test(file.type) || /\.pdf$/i.test(file.name);
+    $("#analizar-ia").style.display = "block";
     if (isPdf) {
-      const reader = new FileReader();
-      reader.onload = () => {
-        const b64 = String(reader.result).split(",")[1] || "";
-        state.pendingPdf = { name: file.name, data: b64 };
-        $("#deed-name").textContent = "📑 " + file.name + " — listo para analizar";
-        $("#analizar-ia").style.display = "block";
-        $("#deed").textContent = "";
-        setIAStatus("");
-      };
-      reader.readAsDataURL(file);
+      $("#deed-name").textContent = "📑 " + file.name;
+      $("#deed").textContent = "";
+      state.deedText = "";
+      if (!window.pdfjsLib) { setIAStatus("No se pudo cargar el lector de PDF (¿sin conexión?).", true); return; }
+      setIAStatus("Extrayendo texto del PDF…");
+      extraerTextoPdf(file).then((t) => {
+        state.deedText = t;
+        const n = t.replace(/\s+/g, "").length;
+        if (n < 40) {
+          setIAStatus("⚠️ El PDF parece escaneado (sin texto seleccionable). Pega aquí el texto de la escritura y pulsa el botón.", true);
+          $("#deed").contentEditable = "true";
+          $("#deed").textContent = "(pega aquí el texto de la escritura)";
+        } else {
+          $("#deed").textContent = t.slice(0, 4000);
+          setIAStatus("Texto extraído (" + n + " caracteres). Pulsa el botón para detectar los linderos.");
+        }
+      }).catch((e) => setIAStatus("Error leyendo el PDF: " + (e.message || e), true));
     } else {
-      state.pendingPdf = null;
-      $("#analizar-ia").style.display = "none";
-      setIAStatus("");
+      $("#deed-name").textContent = "📄 " + file.name;
       const reader = new FileReader();
       reader.onload = () => {
-        $("#deed").textContent = String(reader.result).slice(0, 4000);
-        $("#deed-name").textContent = "📄 " + file.name;
+        state.deedText = String(reader.result);
+        $("#deed").textContent = state.deedText.slice(0, 4000);
+        setIAStatus("Texto cargado. Pulsa el botón para detectar los linderos.");
       };
       reader.readAsText(file);
     }
+  }
+
+  // Extrae el texto de un PDF en el propio navegador (pdf.js, gratis, sin servidor)
+  async function extraerTextoPdf(file) {
+    const buf = await file.arrayBuffer();
+    const pdf = await window.pdfjsLib.getDocument({ data: buf }).promise;
+    let txt = "";
+    for (let i = 1; i <= pdf.numPages; i++) {
+      const page = await pdf.getPage(i);
+      const content = await page.getTextContent();
+      txt += content.items.map((it) => it.str).join(" ") + "\n";
+    }
+    return txt;
   }
 
   function setIAStatus(msg, err) {
@@ -672,44 +692,154 @@
     elx.style.color = err ? "var(--danger)" : "var(--txt-dim)";
   }
 
-  // ---------- Llamada a la IA (backend) ----------
-  async function analizarEscritura() {
-    if (!state.pendingPdf) return;
-    const btn = $("#analizar-ia");
-    btn.disabled = true;
-    btn.textContent = "⏳ Analizando escritura…";
-    setIAStatus("Leyendo el PDF con la IA (puede tardar ~10-30 s)…");
-    try {
-      const url = (window.PLANOS_API || "") + "/api/analizar-escritura";
-      const r = await fetch(url, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ pdf_base64: state.pendingPdf.data, filename: state.pendingPdf.name }),
-      });
-      const data = await r.json().catch(() => ({ ok: false, error: "Respuesta no válida del servidor." }));
-      if (!r.ok || !data.ok) throw new Error(data.error || "Error " + r.status);
-
-      if (data.resumen) {
-        $("#deed").textContent = data.resumen + (data.superficie_m2 ? "\n\nSuperficie: " + data.superficie_m2 + " m²" : "");
-      }
-      if (!data.linderos || !data.linderos.length) {
-        setIAStatus(data.es_escritura === false
-          ? "El documento no parece una escritura con linderos."
-          : "No se encontraron linderos con medidas en el documento.", true);
-        return;
-      }
-      colocarLinderos(data.linderos);
-      setIAStatus("✅ " + data.linderos.length + " linderos generados. Ajústalos sobre la foto: arrastra el terreno, usa Escalar/Rotar (panel derecho) y afina los vértices.");
-    } catch (e) {
-      const msg = String((e && e.message) || e);
-      const friendly = /Failed to fetch|NetworkError|Unexpected token|404/i.test(msg)
-        ? "La función de IA necesita el backend. Abre la web desde el enlace de Vercel (el de GitHub Pages no tiene servidor)."
-        : msg;
-      setIAStatus("❌ " + friendly, true);
-    } finally {
-      btn.disabled = false;
-      btn.textContent = "🤖 Generar linderos con IA";
+  // ---------- Análisis local de la escritura (gratis, en el navegador) ----------
+  function analizarEscritura() {
+    let texto = state.deedText || "";
+    const pegado = $("#deed").textContent || "";
+    if (texto.replace(/\s+/g, "").length < 20 && pegado.length > 20 && !/pega aquí/i.test(pegado)) texto = pegado;
+    if (texto.replace(/\s+/g, "").length < 20) {
+      setIAStatus("No hay texto de escritura para analizar. Si el PDF es escaneado, pega el texto en el recuadro.", true);
+      return;
     }
+
+    // 1) ¿Hay coordenadas? -> perímetro EXACTO (forma, orientación y medidas reales)
+    const coords = detectarCoordenadas(texto);
+    if (coords) {
+      const n = colocarDesdeCoordenadas(coords);
+      setIAStatus("✅ " + n + " coordenadas detectadas. El perímetro se dibujó con su forma y medidas EXACTAS. Colócalo sobre la foto (arrastra · Escalar/Rotar).");
+      return;
+    }
+
+    // 2) Si no, por rumbos (Norte/Sur…) + longitudes
+    const res = parsearLinderos(texto);
+    if (!res.linderos.length) {
+      setIAStatus("No detecté coordenadas ni linderos con medidas. ¿El texto incluye orientaciones (Norte, Sur…) y metros?", true);
+      return;
+    }
+    if (res.resumen) $("#deed").textContent = res.resumen;
+    colocarLinderos(res.linderos);
+    setIAStatus("✅ " + res.linderos.length + " linderos detectados por rumbos y medidas. Ajústalos sobre la foto (arrastra · Escalar/Rotar · afina vértices).");
+  }
+
+  // ---------- Números escritos con letra en español ----------
+  const UNIDADES = {
+    cero: 0, un: 1, uno: 1, una: 1, dos: 2, tres: 3, cuatro: 4, cinco: 5, seis: 6, siete: 7,
+    ocho: 8, nueve: 9, diez: 10, once: 11, doce: 12, trece: 13, catorce: 14, quince: 15,
+    dieciseis: 16, diecisiete: 17, dieciocho: 18, diecinueve: 19, veinte: 20, veintiuno: 21,
+    veintiun: 21, veintidos: 22, veintitres: 23, veinticuatro: 24, veinticinco: 25, veintiseis: 26,
+    veintisiete: 27, veintiocho: 28, veintinueve: 29, treinta: 30, cuarenta: 40, cincuenta: 50,
+    sesenta: 60, setenta: 70, ochenta: 80, noventa: 90, cien: 100, ciento: 100,
+    doscientos: 200, doscientas: 200, trescientos: 300, trescientas: 300, cuatrocientos: 400,
+    cuatrocientas: 400, quinientos: 500, quinientas: 500, seiscientos: 600, seiscientas: 600,
+    setecientos: 700, setecientas: 700, ochocientos: 800, ochocientas: 800, novecientos: 900, novecientas: 900,
+  };
+  function palabrasANumero(tokens) {
+    let total = 0, current = 0, found = false;
+    for (const w of tokens) {
+      if (w === "y") continue;
+      if (w === "mil") { current = current === 0 ? 1 : current; total += current * 1000; current = 0; found = true; continue; }
+      if (UNIDADES[w] != null) { current += UNIDADES[w]; found = true; } else break;
+    }
+    return found ? total + current : null;
+  }
+  const sinAcentos = (s) => (s || "").toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g, "");
+
+  // ---------- Detección de coordenadas (UTM) ----------
+  function detectarCoordenadas(text) {
+    const raw = text.replace(/\s+/g, " ");
+    // Pares X(6 dígitos) ... Y(7 dígitos): UTM típico en España (huso 28-31)
+    const re = /(\d{6}(?:[.,]\d+)?)\D{1,8}?(\d{7}(?:[.,]\d+)?)/g;
+    const pts = []; let m;
+    while ((m = re.exec(raw))) {
+      const x = parseFloat(m[1].replace(/\.(?=\d{3}\b)/g, "").replace(",", "."));
+      const y = parseFloat(m[2].replace(/\.(?=\d{3}\b)/g, "").replace(",", "."));
+      if (isFinite(x) && isFinite(y)) pts.push({ x, y });
+    }
+    return pts.length >= 3 ? pts : null;
+  }
+
+  // Dibuja el polígono EXACTO a partir de coordenadas (UTM en metros)
+  function colocarDesdeCoordenadas(coords) {
+    const xs = coords.map((p) => p.x), ys = coords.map((p) => p.y);
+    const minX = Math.min(...xs), maxX = Math.max(...xs), minY = Math.min(...ys), maxY = Math.max(...ys);
+    const w = maxX - minX || 1, h = maxY - minY || 1;
+    const bg = state.bg || { w: 1280, h: 860 };
+    const k = Math.min((bg.w * 0.45) / w, (bg.h * 0.45) / h);
+    const offX = bg.w * 0.5 - ((minX + maxX) / 2) * k;
+    const cy = (minY + maxY) / 2;
+    // En UTM la Y crece hacia el Norte; en pantalla crece hacia abajo -> se invierte
+    const world = coords.map((p) => ({ x: p.x * k + offX, y: (cy - p.y) * k + bg.h * 0.5 }));
+
+    const poly = crearPoligono();
+    poly.name = "Lindero (coordenadas)";
+    poly.points = world;
+    poly.closed = world.length >= 3;
+    for (let i = 0; i < coords.length; i++) {
+      const a = coords[i], b = coords[(i + 1) % coords.length];
+      poly.edges[i] = { label: Math.round(Math.hypot(b.x - a.x, b.y - a.y) * 10) / 10 + " m" };
+    }
+    state.polygons.push(poly);
+    selectPoly(poly.id);
+    setTool("select");
+    fitView(); refreshLayers(); render();
+    return coords.length;
+  }
+
+  // ---------- Analizador por rumbos (Norte/Sur…) + longitudes ----------
+  const AZIMUTS = {
+    noreste: 45, nordeste: 45, noroeste: 315, sureste: 135, sudeste: 135, suroeste: 225,
+    sudoeste: 225, norte: 0, sur: 180, este: 90, oeste: 270, poniente: 270, naciente: 90,
+    levante: 90, oriente: 90, mediodia: 180, septentrion: 0,
+  };
+  function extraerLongitud(win) {
+    const dig = win.match(/(\d{1,4}(?:[.,]\d{1,2})?)\s*(?:metros?|mts?|ml|m)\b/i);
+    if (dig) return parseFloat(dig[1].replace(",", "."));
+    const low = sinAcentos(win);
+    const idx = low.indexOf("metro");
+    if (idx < 0) return null;
+    const before = low.slice(Math.max(0, idx - 60), idx).trim().split(/\s+/);
+    const numWords = [];
+    for (let i = before.length - 1; i >= 0; i--) {
+      const w = before[i];
+      if (w === "y" || w === "mil" || UNIDADES[w] != null) numWords.unshift(w);
+      else if (numWords.length) break;
+    }
+    let metros = palabrasANumero(numWords);
+    if (metros == null) return null;
+    const cent = low.slice(idx, idx + 60).match(/con\s+([a-z\s]+?)\s+cent/);
+    if (cent) { const c = palabrasANumero(cent[1].trim().split(/\s+/)); if (c != null) metros += c / 100; }
+    return metros;
+  }
+  function extraerColinda(win) {
+    const m = win.match(/(?:linda|colinda|con)\s+(?:con\s+)?([A-Za-zñÑáéíóúÁÉÍÓÚ0-9.,\s]{3,45})/i);
+    return m ? m[1].trim().replace(/\s+/g, " ") : "";
+  }
+  function extraerSuperficie(text) {
+    const m = sinAcentos(text).match(/superficie[^\d]{0,40}(\d[\d.,]*)\s*(?:m2|m²|metros cuadrados|ms?2)/);
+    if (!m) return null;
+    return parseFloat(m[1].replace(/\.(?=\d{3}\b)/g, "").replace(",", "."));
+  }
+  function parsearLinderos(textoRaw) {
+    const text = textoRaw.replace(/\s+/g, " ");
+    const re = /\b(noreste|nordeste|noroeste|sureste|sudeste|suroeste|sudoeste|septentri[oó]n|mediod[ií]a|poniente|naciente|levante|oriente|norte|sur|este|oeste)\b/gi;
+    const linderos = []; let m;
+    while ((m = re.exec(text))) {
+      const termN = sinAcentos(m[1]);
+      const az = AZIMUTS[termN];
+      if (az == null) continue;
+      const win = text.slice(m.index, m.index + 170);
+      const len = extraerLongitud(win);
+      if (len == null || len <= 0 || len > 100000) continue; // exige medida para evitar falsos "este"=this
+      linderos.push({
+        orientacion: termN.charAt(0).toUpperCase() + termN.slice(1),
+        azimut_grados: az,
+        longitud_metros: Math.round(len * 100) / 100,
+        colinda_con: extraerColinda(win),
+      });
+    }
+    const out = linderos.filter((l, i) => i === 0 || !(l.orientacion === linderos[i - 1].orientacion && l.longitud_metros === linderos[i - 1].longitud_metros));
+    const sup = extraerSuperficie(text);
+    return { linderos: out, superficie: sup, resumen: out.length ? "Detectados " + out.length + " linderos" + (sup ? " · superficie " + sup + " m²" : "") + "." : "" };
   }
 
   // ---------- Reconstrucción del polígono desde los linderos ----------
@@ -866,6 +996,10 @@
     wireDrop($("#drop-img"), "image", loadImageFile);
     wireDrop($("#drop-txt"), "deed", loadDeedFile);
     $("#analizar-ia").onclick = analizarEscritura;
+    if (window.pdfjsLib) {
+      window.pdfjsLib.GlobalWorkerOptions.workerSrc =
+        "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
+    }
 
     window.addEventListener("resize", resize);
 

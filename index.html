@@ -48,7 +48,7 @@
           <input type="file" accept=".pdf,application/pdf,.txt,text/plain" hidden />
         </div>
         <div id="deed-name" class="hint" style="margin-top:8px"></div>
-        <button class="btn primary" id="analizar-ia" style="margin-top:10px; display:none">🤖 Generar linderos con IA</button>
+        <button class="btn primary" id="analizar-ia" style="margin-top:10px; display:none">📐 Detectar linderos del documento</button>
         <div id="ia-status" class="hint" style="margin-top:8px"></div>
         <div class="deed" id="deed"></div>
       </div>
@@ -90,6 +90,8 @@
     </aside>
   </div>
 
+  <!-- pdf.js: lee el texto del PDF en el navegador (gratis, sin servidor) -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
   <script src="app.js"></script>
 </body>
 </html>

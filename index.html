@@ -1,0 +1,93 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Planos Interactivos · Delimitación de propiedades</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <div class="app">
+    <!-- ===================== TOPBAR ===================== -->
+    <header class="topbar">
+      <div class="brand">
+        <div class="logo">📐</div>
+        <div>Planos Interactivos <small>· Delimitación de propiedades</small></div>
+      </div>
+
+      <div class="toolbar">
+        <button class="tool" data-tool="select" title="Seleccionar y mover (V)">🖱️ Seleccionar <span class="k">V</span></button>
+        <button class="tool" data-tool="draw" title="Dibujar linderos (D)">✏️ Dibujar <span class="k">D</span></button>
+        <button class="tool" data-tool="delete" title="Borrar puntos/líneas (X)">✂️ Borrar <span class="k">X</span></button>
+      </div>
+
+      <div class="spacer"></div>
+
+      <button class="tool" id="export" title="Guardar proyecto (JSON)">💾 Exportar</button>
+      <button class="tool" id="import" title="Cargar proyecto (JSON)">📂 Importar</button>
+      <input type="file" id="import-input" accept="application/json" hidden />
+      <span class="zoom-ind" id="zoom">100%</span>
+    </header>
+
+    <!-- ===================== PANEL IZQUIERDO ===================== -->
+    <aside class="panel left">
+      <div class="section">
+        <h3>📥 Carga de documentos</h3>
+        <div class="drop" id="drop-img">
+          <div class="big">🗺️</div>
+          Plano / foto aérea
+          <small>Arrastra una imagen o haz clic (PNG, JPG)</small>
+          <input type="file" accept="image/*" hidden />
+        </div>
+        <div class="drop" id="drop-txt">
+          <div class="big">📜</div>
+          Escritura / descripción legal
+          <small>Arrastra un .txt o haz clic</small>
+          <input type="file" accept=".txt,text/plain" hidden />
+        </div>
+        <div id="deed-name" class="hint" style="margin-top:8px"></div>
+        <div class="deed" id="deed"></div>
+      </div>
+
+      <div class="section" style="flex:1">
+        <h3>🗂️ Capas / Linderos</h3>
+        <div class="layers" id="layers"></div>
+      </div>
+
+      <div class="section">
+        <div class="btn-row">
+          <button class="btn danger" id="clear-all">🧹 Limpiar todo</button>
+        </div>
+        <div class="hint" style="margin-top:10px">
+          Atajos: <span class="kbd">V</span> seleccionar · <span class="kbd">D</span> dibujar ·
+          <span class="kbd">X</span> borrar · <span class="kbd">Espacio</span> + arrastrar para desplazar ·
+          <span class="kbd">rueda</span> zoom · <span class="kbd">Supr</span> eliminar.
+        </div>
+      </div>
+    </aside>
+
+    <!-- ===================== LIENZO ===================== -->
+    <main class="canvas-wrap tool-draw">
+      <canvas id="board"></canvas>
+      <div class="float-tip" id="tip"></div>
+      <div class="zoom-controls">
+        <button id="zoom-in" title="Acercar">＋</button>
+        <button id="zoom-out" title="Alejar">－</button>
+        <button id="fit" title="Ajustar a pantalla">⤢</button>
+      </div>
+    </main>
+
+    <!-- ===================== PANEL DERECHO ===================== -->
+    <aside class="panel right">
+      <div class="section" style="flex:1">
+        <h3>🎨 Estilo y personalización</h3>
+        <div id="style-body"></div>
+      </div>
+    </aside>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>

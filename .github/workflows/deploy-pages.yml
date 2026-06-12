@@ -1,0 +1,46 @@
+name: Deploy a GitHub Pages
+
+# Publica la web estática (index.html en la raíz) cada vez que se hace push
+# a la rama principal, y permite lanzarlo manualmente desde la pestaña Actions.
+on:
+  push:
+    branches: ["claude/property-boundary-canvas-app-1402ke"]
+  workflow_dispatch:
+
+# Permisos necesarios para que el despliegue a Pages funcione.
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# Evita despliegues solapados; cancela el anterior si llega uno nuevo.
+concurrency:
+  group: "pages"
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Descargar el repositorio
+        uses: actions/checkout@v4
+
+      - name: Configurar Pages
+        uses: actions/configure-pages@v5
+
+      - name: Preparar archivos de la web
+        run: |
+          mkdir -p _site
+          cp index.html styles.css app.js README.md _site/
+
+      - name: Empaquetar el sitio
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: "_site"
+
+      - name: Desplegar a GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
